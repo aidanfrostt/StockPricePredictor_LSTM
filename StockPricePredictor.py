@@ -84,7 +84,10 @@ warnings.filterwarnings('ignore')
 # ========================
 try:
     sentiment_analyzer = pipeline("text-classification", model="ProsusAI/finbert")
-    newsapi = NewsApiClient(api_key=os.getenv('NEWS_API_KEY', '683af3afe5d2491aa6a683a9c9701fe0'))
+    newsapi = NewsApiClient(api_key=os.getenv('NEWS_API_KEY', 'NEWS_API_KEY'))
+    if not newsapi:
+        raise ValueError("News API key is not set. Please set the NEWS_API_KEY environment variable.")
+    logging.info("Sentiment analysis and news API services initialized successfully.")
 except Exception as e:
     logging.warning(f"Error initializing services: {str(e)}")
     sentiment_analyzer = None
