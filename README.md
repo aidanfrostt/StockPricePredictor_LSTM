@@ -49,10 +49,10 @@ stock-prediction-system/
 ├── README.md                      # Project documentation
 ├── .gitignore                     # Files to ignore in git
 ├── LICENSE                        # Project license
-├── data/                          # (Optional) Data storage
-├── models/                        # (Optional) Saved models
-├── tests/                         # (Optional) Unit tests
-└── utils/                         # (Optional) Utility modules
+├── data/                          # Data storage
+├── models/                        # Saved models
+├── tests/                         # Unit tests
+└── utils/                         # Utility modules
 ```
 
 ---
