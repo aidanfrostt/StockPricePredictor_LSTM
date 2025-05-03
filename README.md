@@ -1,7 +1,6 @@
 # Advanced Stock Prediction System
 
 ![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
 
 An advanced stock price prediction system combining LSTM neural networks and Random Forest models with technical indicators and sentiment analysis.
 
