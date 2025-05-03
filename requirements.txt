@@ -1,0 +1,15 @@
+yfinance
+pandas
+numpy
+matplotlib
+mplfinance
+scikit-learn
+tensorflow
+keras
+keras-tuner
+ta
+seaborn
+newsapi-python
+transformers
+python-dotenv
+pandas_datareader
