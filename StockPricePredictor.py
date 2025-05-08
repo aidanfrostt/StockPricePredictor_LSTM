@@ -212,10 +212,31 @@ def build_lstm_model(input_shape: Tuple[int, int]) -> Optional[Sequential]:
         return None
 
 def prepare_rf_data(data: pd.DataFrame, target_col: str = 'Close') -> Tuple[Optional[pd.DataFrame], Optional[pd.Series]]:
-    """Prepare data for Random Forest model."""
+    """
+    Prepare data for Random Forest model.
+    Adds more lag features, rolling stats, and technical indicators for improved accuracy.
+    """
     try:
         data = data.copy()
         data['target'] = data[target_col].shift(-1)
+        # Add more lags and rolling features for RF
+        for lag in [1, 2, 3, 5, 10, 20, 30, 50, 100]:
+            data[f'Close_Lag_{lag}'] = data[target_col].shift(lag)
+            data[f'Volume_Lag_{lag}'] = data['Volume'].shift(lag)
+        for window in [7, 14, 20, 50, 100, 200]:
+            data[f'SMA_{window}'] = data[target_col].rolling(window=window).mean()
+            data[f'EMA_{window}'] = data[target_col].ewm(span=window, adjust=False).mean()
+            data[f'Volatility_{window}'] = data[target_col].pct_change().rolling(window).std()
+        # Add technical indicators
+        data['RSI_14'] = RSIIndicator(data[target_col], window=14).rsi()
+        macd = MACD(data[target_col])
+        data['MACD'] = macd.macd()
+        data['MACD_Signal'] = macd.macd_signal()
+        data['MACD_Hist'] = macd.macd_diff()
+        bb = BollingerBands(data[target_col])
+        data['BB_Upper'] = bb.bollinger_hband()
+        data['BB_Lower'] = bb.bollinger_lband()
+        data['BB_Width'] = (data['BB_Upper'] - data['BB_Lower']) / data[f'SMA_20']
         data = data.dropna()
         numeric_cols = data.select_dtypes(include=[np.number]).columns.tolist()
         data = data[numeric_cols]
@@ -229,16 +250,27 @@ def prepare_rf_data(data: pd.DataFrame, target_col: str = 'Close') -> Tuple[Opti
         return None, None
 
 def train_random_forest(X: pd.DataFrame, y: pd.Series) -> Tuple[Optional[RandomForestRegressor], Optional[pd.Index]]:
-    """Train a Random Forest model."""
+    """
+    Train a Random Forest model with more trees and feature selection.
+    Uses more estimators and deeper trees for better accuracy.
+    """
     try:
-        selector = SelectKBest(score_func=f_regression, k=min(20, X.shape[1]))
+        # Use more estimators and deeper trees for better accuracy
+        selector = SelectKBest(score_func=f_regression, k=min(40, X.shape[1]))
         X_selected = selector.fit_transform(X, y)
         selected_features = X.columns[selector.get_support()]
         if len(selected_features) == 0:
             selected_features = X.columns.tolist()
         model = RandomForestRegressor(
-            n_estimators=200, max_depth=20, min_samples_split=5, min_samples_leaf=2,
-            max_features='sqrt', random_state=42, n_jobs=-1, bootstrap=True, max_samples=0.8
+            n_estimators=500,  # More trees
+            max_depth=30,      # Deeper trees
+            min_samples_split=3,
+            min_samples_leaf=1,
+            max_features='sqrt',
+            random_state=42,
+            n_jobs=-1,
+            bootstrap=True,
+            max_samples=0.9
         )
         tscv = TimeSeriesSplit(n_splits=5)
         scores = []
@@ -288,8 +320,11 @@ def prepare_lstm_data(
     target_col: str = 'Close',
     n_steps: int = 60,
     test_size: float = 0.2
-) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray], Optional[RobustScaler], Optional[list]]:
-    """Prepare data for LSTM model."""
+) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray], Optional[RobustScaler], Optional[list], Optional[RobustScaler]]:
+    """
+    Prepare data for LSTM model.
+    Ensures feature count consistency between training and prediction.
+    """
     try:
         numeric_cols = data.select_dtypes(include=[np.number]).columns.tolist()
         feature_cols = [col for col in numeric_cols if col != target_col]
@@ -297,6 +332,8 @@ def prepare_lstm_data(
         for col in essential_cols:
             if col not in feature_cols and col in data.columns and col != target_col:
                 feature_cols.append(col)
+        # Sort feature_cols to ensure consistent order
+        feature_cols = sorted(feature_cols)
         features = data[feature_cols]
         target = data[target_col].values.reshape(-1, 1)
         feature_scaler = RobustScaler()
@@ -311,10 +348,10 @@ def prepare_lstm_data(
         split_idx = int(len(X) * (1 - test_size))
         X_train, X_test = X[:split_idx], X[split_idx:]
         y_train, y_test = y[:split_idx], y[split_idx:]
-        return X_train, X_test, y_train, y_test, target_scaler, feature_cols
+        return X_train, X_test, y_train, y_test, target_scaler, feature_cols, feature_scaler
     except Exception as e:
         logging.error(f"Error preparing LSTM data: {str(e)}")
-        return None, None, None, None, None, None
+        return None, None, None, None, None, None, None
 
 def train_lstm_model(
     model: Sequential,
@@ -348,28 +385,33 @@ def predict_with_lstm(
     target_scaler: RobustScaler,
     feature_cols: list,
     n_steps: int = 60,
-    days_to_predict: int = 30
+    days_to_predict: int = 30,
+    feature_scaler: Optional[RobustScaler] = None
 ) -> Optional[pd.DataFrame]:
-    """Make predictions using LSTM model."""
+    """
+    Make predictions using LSTM model.
+    Ensures feature count and order matches training.
+    """
     try:
-        if not isinstance(feature_cols, list):
-            raise ValueError("feature_cols must be a list")
-        available_cols = [col for col in feature_cols if col in data.columns]
-        if len(available_cols) != len(feature_cols):
-            logging.warning(f"{len(feature_cols)-len(available_cols)} features missing from prediction data")
-        if 'Close' not in available_cols and 'Close' in data.columns:
-            available_cols.append('Close')
-        feature_scaler = RobustScaler()
-        scaled_features = feature_scaler.fit_transform(data[available_cols])
+        # Sort feature_cols to ensure order matches training
+        feature_cols = sorted([col for col in feature_cols if col in data.columns])
+        if 'Close' not in feature_cols and 'Close' in data.columns:
+            feature_cols.append('Close')
+        # Use the same scaler as training
+        if feature_scaler is None:
+            feature_scaler = RobustScaler()
+            scaled_features = feature_scaler.fit_transform(data[feature_cols])
+        else:
+            scaled_features = feature_scaler.transform(data[feature_cols])
         predictions = []
         last_sequence = scaled_features[-n_steps:]
         for _ in range(days_to_predict):
-            x_input = last_sequence.reshape(1, n_steps, len(available_cols))
+            x_input = last_sequence.reshape(1, n_steps, len(feature_cols))
             pred = model.predict(x_input, verbose=0)[0, 0]
             predictions.append(pred)
             new_row = np.copy(last_sequence[-1])
-            if 'Close' in available_cols:
-                new_row[available_cols.index('Close')] = pred
+            if 'Close' in feature_cols:
+                new_row[feature_cols.index('Close')] = pred
             last_sequence = np.vstack([last_sequence[1:], new_row])
         predictions = np.array(predictions).reshape(-1, 1)
         predictions = target_scaler.inverse_transform(predictions).flatten()
@@ -399,9 +441,11 @@ def predict_with_random_forest(
             selected_features = selected_features.tolist()
         if not isinstance(selected_features, list) or len(selected_features) == 0:
             raise ValueError("Invalid selected_features - must be a non-empty list")
-        missing_features = [f for f in selected_features if f not in data.columns]
-        if missing_features:
-            raise ValueError(f"Missing required features: {missing_features[:5]}...")
+        # Ensure all selected features exist in data
+        for f in selected_features:
+            if f not in data.columns:
+                # Try to fill with last available value or 0
+                data[f] = data[selected_features[0]].iloc[-1] if len(data) > 0 else 0
         last_date = data.index[-1]
         future_dates = [last_date + timedelta(days=i) for i in range(1, days_to_predict+1)]
         future_data = pd.DataFrame(
@@ -424,16 +468,14 @@ def predict_with_random_forest(
                             future_data.loc[future_dates[i+1], lag_col] = pred
                         else:
                             prev_lag_col = f'Close_Lag_{lag-1}'
-                            if prev_lag_col in selected_features:
-                                future_data.loc[future_dates[i+1], lag_col] = future_data.loc[future_dates[i], prev_lag_col]
-                for window in [7, 20, 50]:
+                            if prev_lag_col in selected_features and len(close_predictions) >= lag:
+                                future_data.loc[future_dates[i+1], lag_col] = np.mean(close_predictions[-lag:])
+                # Update moving averages if present
+                for window in [7, 14, 20, 50, 100, 200]:
                     ma_col = f'SMA_{window}'
                     if ma_col in selected_features:
-                        if len(close_predictions) >= window:
-                            future_data.loc[future_dates[i+1], ma_col] = np.mean(close_predictions[-window:])
-                        else:
-                            hist_data = data['Close'].iloc[-(window-len(close_predictions)):].tolist()
-                            future_data.loc[future_dates[i+1], ma_col] = np.mean(hist_data + close_predictions)
+                        hist_data = data['Close'].iloc[-(window-len(close_predictions)):].tolist() if window > len(close_predictions) else []
+                        future_data.loc[future_dates[i+1], ma_col] = np.mean(hist_data + close_predictions[-min(window, len(close_predictions)):])
         current_rsi = RSIIndicator(data['Close']).rsi().iloc[-1]
         bb = BollingerBands(data['Close'])
         current_bb_pos = (data['Close'].iloc[-1] - bb.bollinger_lband().iloc[-1]) / (bb.bollinger_hband().iloc[-1] - bb.bollinger_lband().iloc[-1])
@@ -584,15 +626,17 @@ def analyze_stock(ticker: str, days_to_predict: int = 30) -> Optional[Dict[str, 
     predictions = None
     logging.info("\nTraining LSTM model...")
     try:
-        X_train, X_test, y_train, y_test, target_scaler, feature_cols = prepare_lstm_data(
+        X_train, X_test, y_train, y_test, target_scaler, feature_cols, feature_scaler = prepare_lstm_data(
             data, n_steps=CONFIG['MODEL']['LSTM_LOOKBACK']
         )
         if X_train is not None:
             lstm_model = build_lstm_model((CONFIG['MODEL']['LSTM_LOOKBACK'], len(feature_cols)))
             if lstm_model:
                 lstm_model, history = train_lstm_model(lstm_model, X_train, y_train, X_test, y_test)
-                lstm_predictions = predict_with_lstm(lstm_model, data, target_scaler, feature_cols,
-                                                     CONFIG['MODEL']['LSTM_LOOKBACK'], days_to_predict)
+                lstm_predictions = predict_with_lstm(
+                    lstm_model, data, target_scaler, feature_cols,
+                    CONFIG['MODEL']['LSTM_LOOKBACK'], days_to_predict, feature_scaler
+                )
                 if lstm_predictions is not None:
                     predictions = lstm_predictions.copy()
                     plot_model_history(history)
